@@ -1,17 +1,28 @@
 
 
+<!-- .. -->
+
+
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>CSV + Gantt Viewer</title>
+
+  <!-- Bootswatch Darkly Theme -->
+  <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.0/dist/darkly/bootstrap.min.css" rel="stylesheet">
+
   <style>
     body {
       background-color: #121212;
       color: #e0e0e0;
-      font-family: Arial, sans-serif;
-      padding: 20px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      _padding: 20px;
+    }
+    h2, h3 {
+      color: #00d1b2;
+      margin-top: 20px;
     }
     table {
       border-collapse: collapse;
@@ -19,27 +30,55 @@
       margin-top: 15px;
     }
     th, td {
-      border: 1px solid #444;
-      padding: 6px 10px;
+      border: 1px solid #333;
+      padding: 8px 12px;
       text-align: left;
     }
     th {
-      background-color: #1e1e1e;
+      background-color: #222;
+      color: #00d1b2;
     }
     tr:nth-child(even) {
       background-color: #1a1a1a;
     }
+    tr:hover {
+      background-color: #2a2a2a;
+    }
     canvas {
       width: 100% !important;
+      margin-bottom: 40px;
+      background-color: #1e1e1e;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+    .accordion-button {
+      font-weight: bold;
+      font-size: 1.2rem;
     }
   </style>
 </head>
-<body>
-  <h2>Upload DP Tracker CSV File</h2>
-  <input type="file" id="csvFile" accept=".csv">
 
-  <h3>📋 Table</h3>
-  <table id="csvTable"></table>
+<body>
+<main class="container my-4">
+  <h2>📂 Upload DP Tracker CSV File</h2>
+  <input class="form-control w-50 mb-4 bg-dark" style="color: #e0e0e0;" type="file" id="csvFile" accept=".csv">
+
+  <div class="accordion mb-4" id="accordionExample">
+    <div class="accordion-item bg-dark border-0">
+      <h2 class="accordion-header" id="headingOne">
+        <button class="accordion-button" type="button" data-bs-toggle="collapse" 
+                data-bs-target="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
+          📋 Table
+        </button>
+      </h2>
+      <div id="collapseOne" class="accordion-collapse collapse show" aria-labelledby="headingOne">
+        <div class="accordion-body">
+          <table id="csvTable" class="table table-dark table-striped table-bordered"></table>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="chartContainer"></div>
 
@@ -49,6 +88,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
 
   <script>
     let chartInstances = [];
@@ -74,7 +114,12 @@
         complete: function(results) {
           let data = results.data;
           data = data.filter(row => row.some(cell => cell.trim() !== ""));
-          const deleteCols = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,25,26,27,28];
+
+          const deleteCols = [1,2,3,4,5,6,7,8,9,11,12,13,14,15,
+                              18,19,20,21,22,23,26,27,28];
+
+          // keep columns 0, 10, 16, 17, 24, 25 (Rig, DP, VP, Start, Site, Well)
+          
           data = data.map(row => row.filter((_, idx) => !deleteCols.includes(idx)));
 
           data = data.map((row, rIdx) => {
@@ -93,23 +138,22 @@
             return row;
           });
 
-          data = data.map(row => row.slice(0, 4));
+          data = data.map((row, rIdx) => {
+            if (rIdx === 0) return row;
+            const rig = row[0] ?? "";
+            const vp = row[1] ?? "";
+            const start = row[2] ?? "";
+            const duration = row[3] ?? 0;
+            const site = row[4] ?? "";
+            const dp = row[5] ?? "";
+            const well = row[6] ?? "";
+            return [rig, start, site, duration, vp, dp, well];
+          });
+
           data = data.filter((_, idx) => idx === 0 || (idx - 3) % 3 === 0);
 
-          let grouped = {};
-          for (let i = 1; i < data.length; i++) {
-            let site = data[i][2];
-            let duration = parseFloat(data[i][3]) || 0;
-            if (!grouped[site]) {
-              grouped[site] = [...data[i]];
-              grouped[site][3] = duration;
-            } else {
-              grouped[site][3] += duration;
-            }
-          }
-
-          let header = ["Rig", "Start", "Site", "Duration"];
-          let finalData = [header, ...Object.values(grouped)];
+          let header = ["Rig", "VP", "Start", "Duration", "DP", "Site", "Well"];
+          let finalData = [header, ...data.slice(1)];
 
           renderTable(finalData);
           renderGantts(finalData);
@@ -131,43 +175,78 @@
       });
     }
 
+
+    /**
+     * Renders Gantt charts based on the provided data.
+     * Data format: [Rig, VP, Start, Duration, DP, Site]
+     */
     function renderGantts(data) {
       chartInstances.forEach(c => c.destroy());
       chartInstances = [];
-
       const container = document.getElementById("chartContainer");
       container.innerHTML = "";
 
-      const rigsMap = {};
+      const vpMap = {};
       for (let i = 1; i < data.length; i++) {
         const rig = data[i][0];
-        const start = parseExcelDate(data[i][1]);
-        const site = data[i][2];
+        const start = parseExcelDate(data[i][2]);
+        const site = data[i][5];
         const duration = Number(data[i][3]);
+        const vp = data[i][1];
+        const dp = data[i][4];
+        const well = data[i][6];
         if (!start) continue;
-        const end = new Date(start.getTime() + duration * 86400000);
-        if (!rigsMap[rig]) rigsMap[rig] = [];
-        rigsMap[rig].push({ site, start, end });
+
+        if (!vpMap[vp]) vpMap[vp] = {};
+        if (!vpMap[vp][rig]) vpMap[vp][rig] = [];
+        vpMap[vp][rig].push({ site, start, duration, dp, well });
       }
 
       const today = new Date();
+      const twoMonthsLater = new Date(today.getFullYear(), today.getMonth() + 2, today.getDate());
       const threeMonthsLater = new Date(today.getFullYear(), today.getMonth() + 3, today.getDate());
       const sixMonthsLater = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
 
-      Object.keys(rigsMap).forEach(rig => {
-        const bars = rigsMap[rig].map(r => ({ y: r.site, x: [r.start, r.end] }));
-        const sites = rigsMap[rig].map(r => r.site);
+      Object.keys(vpMap).forEach(vp => {
+        const datasets = [];
+        const colors = [];
+        const rigs = Object.keys(vpMap[vp]);
+
+        rigs.forEach(rig => {
+          vpMap[vp][rig].forEach(siteObj => {
+            const end = new Date(siteObj.start.getTime() + siteObj.duration * 86400000);
+            const dpValue = siteObj.dp ? siteObj.dp.toString().trim() : "";
+            const isEmptyDP = !dpValue || dpValue === "***";
+
+            datasets.push({ 
+              y: rig, 
+              x: [siteObj.start, end], 
+              site: siteObj.site.substring(0,5),
+              details: {
+                Rig: rig,
+                VP: vp,
+                Start: siteObj.start.toLocaleDateString(),
+                Duration: siteObj.duration,
+                DP: dpValue,
+                Site: siteObj.site,
+                Well: siteObj.well
+              }
+            });
+
+            // push matching color for this bar
+            colors.push(isEmptyDP ? "#ff4c4c" : "#0084c7");
+          });
+        });
 
         const minDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 7);
-        const maxDate = sixMonthsLater;  // <-- fixed to 6 months ahead
+        const maxDate = sixMonthsLater;
 
         const title = document.createElement("h3");
-        // title.textContent = `📊 Gantt Chart - ${rig}`;
-        title.textContent = `📊 ${rig}`;
+        title.textContent = `📊 VP: ${vp}`;
         container.appendChild(title);
 
         const canvas = document.createElement("canvas");
-        canvas.height = Math.max(200, sites.length * 18);
+        canvas.height = Math.max(200, rigs.length * 40);
         container.appendChild(canvas);
 
         const ctx = canvas.getContext("2d");
@@ -176,103 +255,109 @@
           data: {
             datasets: [{
               label: "Schedule",
-              data: bars,
-              backgroundColor: "#00bcd4",
-              borderSkipped: false
+              data: datasets,
+              backgroundColor: colors,   // <-- per-bar colors
+              borderRadius: 6,
+              borderSkipped: false,
+              borderColor: "#000000",
+              borderWidth: 1,
+              parsing: { xAxisKey: "x", yAxisKey: "y" }
             }]
           },
           options: {
             indexAxis: "y",
             responsive: false,
             maintainAspectRatio: false,
-            parsing: { xAxisKey: "x", yAxisKey: "y" },
             scales: {
               x: {
                 type: "time",
-                time: {
-                  unit: "day",
-                  stepSize: 1,
-                  tooltipFormat: "dd-MMM-yyyy",
-                  displayFormats: { day: "dd-MMM" }
-                },
+                time: { unit: "day", stepSize: 1, tooltipFormat: "dd-MMM-yyyy", displayFormats: { day: "dd-MMM" } },
                 min: minDate,
                 max: maxDate,
-                ticks: {
-                  color: "white",
-                  autoSkip: false,
-                  stepSize: 1,
-                  source: "auto",
-                  maxRotation: 0,
-                  minRotation: 0,
-                  callback: function(value) {
-                    const d = new Date(value);
-                    if (isNaN(d)) return value;
-                    const dd = String(d.getDate()).padStart(2, "0");
-                    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                    return `${dd}-${months[d.getMonth()]}`;
-                  }
-                },
-                grid: { color: "#444" }
+                ticks: { color: "#ccc" },
+                grid: { color: "#333" }
               },
               y: {
                 type: "category",
-                labels: sites,
-                ticks: { color: "white", autoSkip: false }, // show all labels
-                grid: { color: "#444" }
+                labels: rigs,
+                ticks: { color: "#ccc", font: { weight: "bold" } },
+                grid: { color: "#333" }
               }
             },
             plugins: {
               legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => {
+                    const d = ctx.raw.details;
+                    return [
+                      `Rig: ${d.Rig}`,
+                      `VP: ${d.VP}`,
+                      `Start: ${d.Start}`,
+                      `Duration: ${d.Duration} days`,
+                      `DP: ${d.DP}`,
+                      `Site: ${d.Site}`,
+                      `Well: ${d.Well}`
+                    ];
+                  }
+                }
+              },
+              datalabels: {
+                anchor: "center",
+                align: "center",
+                color: "#000",
+                backgroundColor: "rgba(255,255,255,0)",
+                borderRadius: 4,
+                padding: 2,
+                font: { weight: "bold" },
+                formatter: (value) => value.site
+              },
               annotation: {
                 annotations: {
                   futureBox: {
                     type: "box",
-                    xMin: today,
+                    xMin: twoMonthsLater,
                     xMax: threeMonthsLater,
                     backgroundColor: "rgba(255,0,0,0.15)",
                     borderWidth: 0
                   },
                   todayLine: {
                     type: "line",
-                    xMin: today,
-                    xMax: today,
-                    borderColor: "red",
-                    borderWidth: 2,
-                    label: {
-                      enabled: true,
-                      content: "Today",
-                      position: "start",
-                      color: "red",
-                      backgroundColor: "rgba(255,255,255,0.8)",
-                      font: { weight: "bold" }
-                    }
+                    xMin: today, xMax: today,
+                    borderColor: "red", borderWidth: 2,
+                    label: { enabled: true, content: "Today", position: "start", color: "red" }
                   }
                 }
               },
               zoom: {
-                zoom: {
-                  wheel: { enabled: true },
-                  pinch: { enabled: true },
-                  mode: "x"
-                },
-                pan: {
-                  enabled: true,
-                  mode: "x"
-                },
-                limits: {
-                  x: { min: minDate, max: maxDate }
-                }
+                zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "x" },
+                pan: { enabled: true, mode: "x" },
+                limits: { x: { min: minDate, max: maxDate } }
               }
             },
-            barThickness: 10,
+            barThickness: 18,
             animation: false,
             hover: { mode: null }
-          }
+          },
+          plugins: [ChartDataLabels]
         });
-
         chartInstances.push(chart);
       });
     }
+
+
+
   </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"></script>
+</main>
 </body>
 </html>
+
+
+
+
+
+
+
+<!-- . -->
